@@ -287,12 +287,23 @@ OpenClaw can be installed three ways. Pick based on how much hand-holding (and c
 
 ```bash
 # Option A — pnpm (recommended)
-$ pnpm setup                          # one-time: prepares the global pnpm dir
-$ source ~/.zshrc                     # picks up the PATH change pnpm setup made
+
+# A.0  Activate pnpm via Corepack (ships with Node 24 — no extra install needed)
+$ corepack enable
+$ corepack prepare pnpm@latest --activate
+$ pnpm -v                             # verify pnpm is now available (e.g. 10.x)
+
+# A.1  Prepare pnpm's global dir and update PATH
+$ pnpm setup                          # one-time: prepares ~/Library/pnpm and exports PNPM_HOME
+$ source ~/.zshrc                     # pick up the PATH change pnpm setup wrote
+
+# A.2  Install OpenClaw and approve its postinstall scripts
 $ pnpm add -g openclaw@latest
 $ pnpm approve-builds -g              # approve postinstall scripts when prompted
 $ openclaw --version
 ```
+
+> ⚠️ If `pnpm -v` returns `command not found`, Corepack didn't activate. Common cause: the shell's `node` is not the Homebrew `node@24` you installed in §2.2 — re-check `which node` returns `/opt/homebrew/opt/node@24/bin/node`. As a fallback, install pnpm directly: `brew install pnpm`.
 
 ```bash
 # Option B — official installer (alternative)
