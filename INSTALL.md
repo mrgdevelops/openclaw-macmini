@@ -6,6 +6,20 @@
 
 ---
 
+## Before you start — gather these
+
+A 10-minute prep that saves 2 hours of friction later.
+
+- [ ] **Mac mini (Apple Silicon)**, factory-reset-ready, unplugged.
+- [ ] **Ethernet cable** plugged into your router *or* Wi-Fi credentials at hand.
+- [ ] A **monitor + USB keyboard + mouse** for the first boot. After Tailscale is up (Phase 6) you can go truly headless, but the install itself needs a screen.
+- [ ] **Password manager** ready — for the FileVault recovery key (Phase 1.1) and the OpenClaw auth token (Phase 3.2).
+- [ ] **External SSD** for Time Machine (Phase 1.5) — recommended, not blocking. Encrypted.
+- [ ] (Optional, for later) **Prepaid SIM** to register Telegram/WhatsApp under the agent's identity (Phase 5.1).
+- [ ] **~2 hours uninterrupted.** First-time installs always discover something.
+
+---
+
 ## Phase 0 — Reset & first boot
 
 **Goal:** start from a known-clean state with a single local admin user.
@@ -39,6 +53,23 @@ $ sudo fdesetup enable
 
 ✅ **Verify:** `sudo fdesetup status` → `FileVault is On.`
 
+> ⚠️ **FileVault headless cold-boot caveat (read this before your next reboot).**
+>
+> FileVault requires a password at the *pre-boot* screen — *before* the kernel, the network stack, Tailscale or sshd come up. On a headless Mac mini that means: after a power cut or a hard reboot, the Mac sits at the unlock screen indefinitely and is **unreachable over the network** until someone physically types the password. Tailscale, OpenClaw daemon, Ollama — all stay offline.
+>
+> Mitigations, in order of pragmatism for this build:
+>
+> 1. **Keep the Mac mini powered on 24/7.** No power-cycling = no cold-boot prompt. Use a UPS if your area has frequent outages.
+> 2. **For *planned* reboots, use `sudo fdesetup authrestart`** — it stages the FileVault key in memory so the next single boot skips the password prompt and comes up to the login screen with the network already attached:
+>    ```bash
+>    $ sudo fdesetup authrestart
+>    # Mac reboots. After the kernel comes up, sshd / Tailscale / OpenClaw start as usual.
+>    ```
+> 3. **Keep a small monitor + USB keyboard within reach** for the rare cold-boot. After once you log in, set up auto-login at the macOS login screen (System Settings → Users & Groups → Automatic login). This handles the *post*-FileVault login but does **not** bypass the FileVault prompt itself.
+> 4. **Apple's "MDM-style" FileVault unlock workflows** (PreBoot recovery via Apple Business Manager / Apple Remote Desktop) require an Apple ID and a remote-management framework. Out of scope for this build — see the Apple ID decision in `TODO.md §A`.
+>
+> Bottom line: design assuming the Mac stays on. Use `authrestart` for any reboot you trigger yourself. Be prepared to physically unlock once if power fails.
+
 ### 1.2 Application firewall
 
 ```bash
@@ -48,7 +79,7 @@ $ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
 $ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode
 ```
 
-**Why:** stealth mode drops (rather than rejects) probes from the LAN. Combined with loopback-only binds in Phase 2-3, the box is effectively invisible from the LAN.
+**Why:** stealth mode makes the Mac silently *drop* — rather than actively *reject* — unsolicited inbound packets, so port scans see the Mac as offline. Combined with loopback-only binds in Phase 2–3, the box is effectively invisible from the LAN.
 
 > ⚠️ **Do NOT** run `socketfilterfw --setblockall on`. It breaks Tailscale (Phase 6) silently — `setblockall` blocks inbound on every app including signed ones, so the SSH-over-tailnet and Screen-Sharing-over-tailnet you're building toward will quietly stop working. Stealth mode + loopback-only binds is the right shape for this install.
 
@@ -85,6 +116,24 @@ PermitRootLogin no
 
 Plug in a dedicated external SSD, enable Time Machine, and encrypt the backup. With FileVault on, an encrypted Time Machine is non-negotiable for this kind of setup. (Skip only as a temporary measure if you don't have a disk yet — circle back as soon as you do.)
 
+### 1.6 Egress monitoring (optional, paranoid mode)
+
+If you want to *prove* nothing leaks once everything is installed, layer an outbound-firewall on top. macOS options:
+
+- **Little Snitch** (commercial, well-maintained, the gold standard).
+- **LuLu** by Objective-See (free, open-source, [github.com/objective-see/LuLu](https://github.com/objective-see/LuLu)).
+
+Either lets you set Ollama and `node` (the OpenClaw process) to **deny outbound by default**, then allow only what you whitelist:
+
+- `*.ollama.com` for model pulls.
+- `registry.npmjs.org` / `registry.npmjs.com` for OpenClaw updates (npm/pnpm).
+- `formulae.brew.sh` and Homebrew CDNs for `brew upgrade`.
+- `controlplane.tailscale.com` and `*.tailscale.com` for Tailscale (Phase 6).
+
+Once weights are pulled and OpenClaw is up to date, you can flip both Ollama and Node to fully offline and the whole stack still works locally.
+
+Skip this if your threat model is "private agent at home". Recommended if your threat model is "every byte that leaves this box should be on a list I approved".
+
 ✅ **Phase 1 verification:**
 
 ```bash
@@ -110,6 +159,8 @@ $ brew --version
 ```
 
 ### 2.2 Node 24 — and *why* via Homebrew
+
+> 📌 **Quick path note.** OpenClaw's official `install.sh` (Phase 3.1 Option B) will *attempt* to install Node 24 itself if it isn't present. In practice on Apple Silicon it has two friction points: (a) it can fail mid-run on Homebrew's first install for permissions, requiring you to re-run with `sudo`, and (b) Homebrew installs `node@24` keg-only, so the script doesn't always wire the PATH correctly — you end up with `command not found` afterward. Community guides (Eubanks, Cordero) all converge on the same advice: **install Homebrew + Node 24 manually first**, verify, then run the OpenClaw installer. That's exactly what this section does.
 
 You asked: brew vs nvm vs official installer. For this single-purpose Mac, **Homebrew + Node 24 is the right call.** Reasoning:
 
@@ -218,22 +269,56 @@ Then in §3.3 use `gemma4-claw` as the `models[].id` instead of `gemma4:4b`.
 
 **Goal:** install OpenClaw, run onboarding, wire it to local Ollama.
 
-### 3.1 Install (global npm)
+### 3.1 Install — three options, choose one
+
+OpenClaw can be installed three ways. Pick based on how much hand-holding (and convenience) you want versus how much you want to audit. **All three assume Phase 2 is complete (Homebrew + Node 24 already on PATH).**
+
+| Option | Command | When to use |
+|---|---|---|
+| **A. pnpm (recommended)** | `pnpm setup && source ~/.zshrc && pnpm add -g openclaw@latest` | Best alignment with OpenClaw's internal layout. Most robust today. |
+| **B. Official installer** | `curl -fsSL https://openclaw.ai/install.sh \| bash` | Canonical "quickstart" from the OpenClaw site. Convenient, but auto-launches onboarding at the end and has Apple Silicon friction (see caveat). |
+| **C. npm (with caveat)** | `npm install -g openclaw@latest` | Listed in OpenClaw's README as supported, but `npm` global installs have been reported to silently drop channel-plugin dependencies on `2026.4.x` (issue [#61787](https://github.com/openclaw/openclaw/issues/61787)). Use only if A and B are blocked, and verify every CLI command works after install. |
+
+**The recommended path for this build is Option A (pnpm).** It's the package manager OpenClaw actually targets internally — `package.json` declares `"packageManager": "pnpm@10.32.1"`, and the project's `jiti`-based runtime resolution assumes pnpm's non-flat `node_modules` layout. npm's flat hoisting can leave channel plugins half-installed.
 
 ```bash
-$ npm install -g openclaw@latest
+# Option A — pnpm (recommended)
+$ pnpm setup                          # one-time: prepares the global pnpm dir
+$ source ~/.zshrc                     # picks up the PATH change pnpm setup made
+$ pnpm add -g openclaw@latest
+$ pnpm approve-builds -g              # approve postinstall scripts when prompted
 $ openclaw --version
 ```
 
-> If you'd rather audit the source, the from-source path is in the [appendix](#appendix-install-openclaw-from-source).
+```bash
+# Option B — official installer (alternative)
+$ curl -fsSL https://openclaw.ai/install.sh | bash
+# Heads up: this auto-runs `openclaw onboard` at the end.
+# If you'd rather control onboarding yourself, use Option A or C.
+```
+
+> ⚠️ **Heads up on Option B (Apple Silicon).** Community reports show two recurring frictions: (1) the script can fail on first run because Homebrew install needs admin privileges in non-interactive mode — the recovery is to re-run with `sudo !!`; (2) on Apple Silicon, `node@24` is keg-only after Homebrew installs it, so the script may finish *appearing* successful while `node`/`openclaw` still throw `command not found` until you export the PATH yourself (Phase 2.2 already handles this, which is why we install brew + node manually first).
+
+```bash
+# Option C — npm (last resort, with caveat)
+$ npm install -g openclaw@latest
+$ openclaw --version
+$ openclaw doctor    # verify channel plugins are present; if MODULE_NOT_FOUND, fall back to Option A
+```
+
+> If you'd rather audit the source, the from-source path is in the [appendix](#appendix--install-openclaw-from-source).
 
 ### 3.2 Onboarding
+
+> 📌 **If you used Option B (`install.sh`),** onboarding has already started automatically — the script lands you in the interactive wizard at the end of the install, beginning with a security disclaimer (*"I understand this is powerful and inherently risky. Continue?"*). Answer the prompts following the guidance below, then skip to §3.3.
+
+For Options A and C, launch onboarding explicitly:
 
 ```bash
 $ openclaw onboard --install-daemon
 ```
 
-When prompted:
+When prompted (either path):
 
 - **Gateway host:** `127.0.0.1` (do not accept `0.0.0.0` — that exposes the agent to your LAN).
 - **Gateway / web UI port:** the wizard typically defaults to `18789` for the web UI. Accept the default unless you have a port conflict.
@@ -309,12 +394,24 @@ $ echo 'alias claw-health="..."' >> ~/.zshrc   # paste the same alias
 ### 4.3 Updates
 
 ```bash
-# weekly-ish
+# weekly-ish — adjust the OpenClaw line to match your install method from §3.1
 $ brew update && brew upgrade
+
+# If you installed OpenClaw via Option A (pnpm — recommended):
+$ pnpm update -g openclaw
+
+# If you installed via Option B (install.sh):
+$ curl -fsSL https://openclaw.ai/install.sh | bash    # the installer is also the updater
+
+# If you installed via Option C (npm):
 $ npm update -g openclaw
+
+# Then, regardless of install method:
 $ ollama pull gemma4:4b   # re-pull periodically for quant fixes
 $ openclaw doctor
 ```
+
+> 📌 **Before applying updates,** glance at OpenClaw's [release notes](https://github.com/openclaw/openclaw/releases) for breaking changes — especially in skill APIs and config schema. A 24/7 personal box is exactly where you want to *not* be the first to discover a regression.
 
 ### 4.4 Confirm nothing is exposed
 

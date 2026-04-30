@@ -61,7 +61,7 @@ The actual setup lives in [INSTALL.md](INSTALL.md), structured in phases so each
 1. **Phase 0 — Reset.** Erase All Content and Settings → fresh macOS, single local admin, no iCloud.
 2. **Phase 1 — Base hardening.** FileVault, application firewall (stealth + block-all), SSH key-only, Wake-for-network.
 3. **Phase 2 — Runtime stack.** Homebrew → Node 24 → Ollama → pull Gemma 4 (loopback-only).
-4. **Phase 3 — OpenClaw.** `npm install -g openclaw@latest` → `openclaw onboard` → wire to local Ollama.
+4. **Phase 3 — OpenClaw.** Install via pnpm (recommended), the official `install.sh`, or npm — see [INSTALL.md §3.1](INSTALL.md) — then `openclaw onboard` and wire to local Ollama.
 5. **Phase 4 — Operations.** Background services, log paths, update workflow.
 6. **Phase 5 — Assistant identity.** Email, GitHub, social accounts (configured once the base is stable).
 7. **Phase 6 — Remote access.** Tailscale for secure access from other devices.
