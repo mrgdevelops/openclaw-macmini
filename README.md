@@ -49,9 +49,7 @@ Design choices, with the reasoning behind each:
 ```
 openclaw-macmini/
 ├── README.md          # this file — project overview
-├── INSTALL.md         # step-by-step install guide (the meat)
-├── .gitignore         # excludes personal notes, IDE files, secrets
-└── doc/               # working notes (personal — git-ignored)
+└── INSTALL.md         # step-by-step install guide (the meat)
 ```
 
 The actual setup lives in [INSTALL.md](INSTALL.md), structured in phases so each step is reproducible from a clean macOS install.
@@ -82,10 +80,18 @@ A long-form Medium article with trade-offs, conclusions, and the AWS-vs-local co
 
 ## Resources
 
-- **OpenClaw — official:** <https://openclaw.ai/>
-- **OpenClaw — GitHub:** <https://github.com/openclaw/openclaw>
-- **Ollama:** <https://ollama.com/>
-- **Gemma 4 on Ollama:** <https://ollama.com/library/gemma4>
+**OpenClaw**
+
+- Official site: <https://openclaw.ai/>
+- GitHub: <https://github.com/openclaw/openclaw>
+- Showcase (community deployments): <https://openclaw.ai/showcase>
+- `SOUL.md` template & docs: <https://docs.openclaw.ai/reference/templates/SOUL>
+- `soul.md` standard / spec: <https://soul.md/>
+
+**Local LLM stack**
+
+- Ollama: <https://ollama.com/>
+- Gemma 4 on Ollama: <https://ollama.com/library/gemma4>
 
 ---
 
