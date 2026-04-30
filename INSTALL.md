@@ -90,14 +90,16 @@ $ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode
 - **Wake for network access:** ON — keeps the Mac reachable over Tailscale (Phase 6) when the display is asleep.
 - **Prevent automatic sleeping when the display is off:** ON — stops the OpenClaw daemon from drifting offline when the box idles. (On Mac mini there is no battery saver to fight, but the option is there.)
 
-Optional belt-and-braces for an always-on assistant:
+Optional belt-and-braces for an always-on assistant — `pmset` is the macOS power-management CLI, and `-a` applies a setting to *all* power sources (AC, battery, UPS — for a Mac mini this just means AC):
 
 ```bash
-$ sudo pmset -a sleep 0
-$ sudo pmset -a disksleep 0
-$ sudo pmset -a powernap 1
-$ pmset -g
+$ sudo pmset -a sleep 0       # disable system sleep entirely (0 = never)
+$ sudo pmset -a disksleep 0   # disable disk spin-down — keep the SSD always responsive
+$ sudo pmset -a powernap 1    # allow background work in any low-power state (Time Machine, etc.)
+$ pmset -g                    # print the current settings to verify the change took effect
 ```
+
+The first two are the load-bearing ones for a 24/7 personal agent: you want the Mac to stay fully awake and the disk always ready, so OpenClaw and Ollama never pause mid-task. `powernap 1` is a fallback for any future low-power state the system might still enter; `pmset -g` should now show `sleep 0`, `disksleep 0`, `powernap 1` in the output.
 
 ### 1.4 SSH — defer, harden later
 
@@ -215,26 +217,28 @@ $ sudo lsof -iTCP:11434 -sTCP:LISTEN -n -P
 
 ### 2.4 Pull Gemma 4
 
-> **This Mac mini has 16 GB RAM → use `gemma4:4b`.** Confirm the exact tag at <https://ollama.com/library/gemma4> before pulling, in case Google has renamed the variant.
+> **This Mac mini has 16 GB RAM → use `gemma4:e4b`.** Confirm the exact tag at <https://ollama.com/library/gemma4> before pulling, in case Google has renamed the variant.
 
-For reference (different machines):
+**About the `e` prefix.** In Gemma 4's tag system, `e` stands for *Effective* parameters — a Mixture-of-Experts architecture where the listed parameter count refers to *active* parameters per inference, not total stored weights. The `e2b` and `e4b` variants are the **edge-deployment** branch of Gemma 4: hybrid local/global attention, Per-Layer Embeddings, designed for laptops/Mac minis. The non-prefixed sizes (`26b`, `31b`) are the larger *dense* models for higher-end hardware.
+
+Reference matrix for different machines:
 
 | Mac mini RAM | Suggested tag | Notes |
 |---|---|---|
-| **16 GB (this box)** | **`gemma4:4b`** | **Fits comfortably; may be limited for tool-use — see caveat below.** |
-| 24 GB | `gemma4:12b` (Q4_K_M) | Sweet spot for agentic tool-use. |
-| 32 GB | `gemma4:12b` (Q5/Q8) | More accuracy, still fast. |
-| 64 GB+ | `gemma4:26b` (MoE) | ~4 B params active per inference; best quality. |
+| 8 GB | `gemma4:e2b` | Smallest edge variant (2B effective). Tight on 8 GB but feasible. |
+| **16 GB (this box)** | **`gemma4:e4b`** | **Edge variant, 4B effective. Fits comfortably; agentic caveat below.** |
+| 32 GB+ | `gemma4:26b-a4b-it-q4_K_M` | 26B MoE with 4B active per inference. Better quality at similar inference cost as `e4b`, but ~4× the working-memory footprint. |
+| 64 GB+ | `gemma4:26b` (dense) or `gemma4:31b` | Dense models, top-end quality, heavy. |
 
-> ⚠️ **Agentic caveat for 4B.** Community deployment guides flag `gemma4:12b (Q4_K_M)` as the actual sweet spot for OpenClaw-style tool-calling reliability. The 4B variant is what fits in 16 GB, but may be inconsistent emitting structured tool-call JSON under longer ReAct loops. Plan: start with 4B, evaluate against your real workflows; if tool-calls degrade, two ways out — (a) tighten the Modelfile (next subsection), (b) upgrade RAM and move to 12B.
+> ⚠️ **Agentic caveat for `e4b`.** Edge variants are tuned for efficiency and may be less reliable than larger dense or MoE models when emitting structured tool-call JSON under longer ReAct loops. Plan: start with `e4b`, evaluate against real workflows; if tool-calls degrade, two ways out — (a) tighten the Modelfile (next subsection), (b) upgrade RAM and move to `26b-a4b-it-q4_K_M` (the smallest practical step up).
 
 ```bash
-$ ollama pull gemma4:4b
-$ ollama run gemma4:4b "In one sentence, who built you?"
+$ ollama pull gemma4:e4b
+$ ollama run gemma4:e4b "In one sentence, who built you?"
 # /bye to exit
 ```
 
-### 2.5 Tune Gemma 4 4B for tool-calling (custom Modelfile)
+### 2.5 Tune Gemma 4 E4B for tool-calling (custom Modelfile)
 
 For agentic JSON tool-calling, two parameters matter most:
 
@@ -247,7 +251,7 @@ Create the tuned model:
 
 ```bash
 $ cat > ~/gemma4-claw.Modelfile <<'EOF'
-FROM gemma4:4b
+FROM gemma4:e4b
 
 PARAMETER temperature 0.1
 PARAMETER num_ctx 8192
@@ -261,7 +265,7 @@ $ ollama create gemma4-claw -f ~/gemma4-claw.Modelfile
 $ ollama run gemma4-claw "Echo this exactly: TOOL_CALL_OK"
 ```
 
-Then in §3.3 use `gemma4-claw` as the `models[].id` instead of `gemma4:4b`.
+Then in §3.3 use `gemma4-claw` as the `models[].id` instead of `gemma4:e4b`.
 
 ---
 
@@ -407,7 +411,7 @@ $ curl -fsSL https://openclaw.ai/install.sh | bash    # the installer is also th
 $ npm update -g openclaw
 
 # Then, regardless of install method:
-$ ollama pull gemma4:4b   # re-pull periodically for quant fixes
+$ ollama pull gemma4:e4b   # re-pull periodically for quant fixes
 $ openclaw doctor
 ```
 
@@ -604,11 +608,11 @@ Then continue from §3.2 (Onboarding).
 | `Unauthorized` from OpenClaw → Ollama | Empty `apiKey` in gateway config | Set any non-empty string, e.g. `"ollama-local"` |
 | Gateway listens on `0.0.0.0` | Wizard default override | Edit gateway config → `host: "127.0.0.1"`, restart |
 | `pnpm` blocks postinstall scripts | pnpm v9+ default | `pnpm approve-builds -g` |
-| OOM loading 12B/26B | RAM < tier required | Drop to `gemma4:4b` |
+| OOM loading `26b` / `31b` | RAM below tier required | Drop to `gemma4:e4b` (or `gemma4:e2b` if even tighter) |
 | Firewall blocks UI in browser | UI on non-loopback | Open `http://127.0.0.1:18789` exactly |
 | Tailscale SSH/Screen-sharing silently fails | `socketfilterfw --setblockall on` was applied | Disable: `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setblockall off` |
 | Perplexity returns HTTP 400 "Invalid model" | Wrong model id format | Use literal `"sonar-pro"` in `openclaw.json`, **not** `"perplexity/sonar-pro"` |
-| Tool-calls return malformed JSON / wrong tool names | Temperature too high, or context overflow | Use the tuned `gemma4-claw` Modelfile from §2.5 (`temperature 0.1`, `num_ctx 8192`); if it persists, evaluate moving to `gemma4:12b` |
+| Tool-calls return malformed JSON / wrong tool names | Temperature too high, context overflow, or the edge variant struggling under load | Use the tuned `gemma4-claw` Modelfile from §2.5 (`temperature 0.1`, `num_ctx 8192`); if it persists, step up to `gemma4:26b-a4b-it-q4_K_M` (needs ≥32 GB RAM) |
 
 ---
 
