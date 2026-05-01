@@ -38,6 +38,42 @@
 
 ✅ **Verify:** `sw_vers` returns expected macOS version; `whoami` returns your admin username; not signed into iCloud.
 
+### 0.1 Go headless — enable SSH & Screen Sharing
+
+> **This is the last step with a physical keyboard.** After this, disconnect the monitor/keyboard/mouse and do everything from your Windows desktop.
+
+**On the Mac:**
+
+```bash
+# Enable SSH
+$ sudo systemsetup -setremotelogin on
+
+# Enable Screen Sharing (VNC)
+$ sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false
+$ sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+# Or simply: System Settings → General → Sharing → Screen Sharing: ON
+
+# Find your Mac's LAN IP
+$ ipconfig getifaddr en0    # Ethernet
+# or
+$ ipconfig getifaddr en1    # Wi-Fi
+```
+
+**From Windows (SSH — terminal access):**
+
+```powershell
+# PowerShell has SSH built in
+ssh yourusername@192.168.x.x
+```
+
+**From Windows (VNC — full desktop):**
+
+Download [RealVNC Viewer](https://www.realvnc.com/en/connect/download/viewer/) (free) or any VNC client. Connect to `192.168.x.x`. Enter Mac username + password. Full desktop.
+
+> 📌 **Security note:** SSH and Screen Sharing are now open on your LAN. This is fine for a home network. In Phase 6, we add Tailscale and can restrict these to the tailnet only. In Phase 3.4, we harden SSH to key-only auth.
+
+✅ **Verify:** from Windows, `ssh yourusername@<mac-ip>` connects. VNC client shows the Mac desktop. Disconnect monitor/keyboard/mouse from the Mac.
+
 ---
 
 ## Phase 1 — Runtime stack
