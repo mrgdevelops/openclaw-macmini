@@ -59,14 +59,14 @@ The actual setup lives in [INSTALL.md](INSTALL.md), structured in phases so each
 ## Install phases (overview)
 
 1. **Phase 0 — Reset.** Erase All Content and Settings → fresh macOS, single local admin, no iCloud.
-2. **Phase 1 — Base hardening.** FileVault, application firewall (stealth + block-all), SSH key-only, Wake-for-network.
-3. **Phase 2 — Runtime stack.** Homebrew → Node 24 → Ollama → pull Gemma 4 (loopback-only).
-4. **Phase 3 — OpenClaw.** Install via pnpm (recommended), the official `install.sh`, or npm — see [INSTALL.md §3.1](INSTALL.md) — then `openclaw onboard` and wire to local Ollama.
-5. **Phase 4 — Operations.** Background services, log paths, update workflow.
+2. **Phase 1 — Runtime stack.** Homebrew → Node 24 → Ollama → pull Gemma 4 (loopback-only).
+3. **Phase 2 — OpenClaw.** Install via pnpm, official `install.sh`, or npm → `openclaw onboard` → wire to local Ollama.
+4. **Phase 3 — Hardening.** FileVault, application firewall (stealth), agent permissions lockdown, wake-for-network.
+5. **Phase 4 — Operations.** Background services, health checks, update workflow.
 6. **Phase 5 — Assistant identity.** Email, GitHub, social accounts (configured once the base is stable).
 7. **Phase 6 — Remote access.** Tailscale for secure access from other devices.
 
-Phases 0–4 produce a working local assistant. 5–6 are quality-of-life additions on top.
+Phases 0–2 produce a working local assistant. 3–6 harden, operationalise, and extend it.
 
 ---
 
