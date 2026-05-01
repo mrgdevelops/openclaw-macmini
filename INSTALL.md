@@ -3,6 +3,8 @@
 > Step-by-step install of OpenClaw + Ollama + Gemma 4 on a dedicated Mac Mini, structured in phases. Each phase has a **goal**, the **commands**, and a **verification** step. This is meant to be reproducible from a clean macOS install.
 >
 > **Conventions:** commands prefixed with `$` run as your normal user. `sudo` is called out explicitly. All localhost binds are `127.0.0.1` — never `0.0.0.0`, never a LAN IP.
+>
+> **Verified working on:** macOS Tahoe 26.4.1 · Mac mini 16 GB · Homebrew 5.1.8 · Node 24.15 · pnpm 10.33 · Ollama (Homebrew formula) · Gemma 4 (`:e4b` via `:latest`) · OpenClaw 2026.4.29 (commit `a448042`). Last verified end-to-end on 2026-04-30.
 
 ---
 
@@ -233,10 +235,22 @@ Reference matrix for different machines:
 > ⚠️ **Agentic caveat for `e4b`.** Edge variants are tuned for efficiency and may be less reliable than larger dense or MoE models when emitting structured tool-call JSON under longer ReAct loops. Plan: start with `e4b`, evaluate against real workflows; if tool-calls degrade, two ways out — (a) tighten the Modelfile (next subsection), (b) upgrade RAM and move to `26b-a4b-it-q4_K_M` (the smallest practical step up).
 
 ```bash
-$ ollama pull gemma4:e4b
-$ ollama run gemma4:e4b "In one sentence, who built you?"
+# ✅ Recommended for first install — pulls and registers under all aliases
+$ ollama pull gemma4
+$ ollama run gemma4 "In one sentence, who built you?"
 # /bye to exit
+
+# Verify what's registered locally:
+$ ollama list
+# Should show gemma4 (~3 GB).
 ```
+
+> 📌 **Why `ollama pull gemma4` and not `ollama pull gemma4:e4b`?** They resolve to the same weights today (`gemma4:e4b` is the `:latest` tag), but they differ in **how the model is registered locally**:
+>
+> - `ollama pull gemma4` → registers under all of: `gemma4`, `gemma4:latest`, *and* `gemma4:e4b`. OpenClaw can find it whether the gateway config says `"gemma4"`, `"gemma4:latest"`, or `"gemma4:e4b"`.
+> - `ollama pull gemma4:e4b` → registers **only** as `gemma4:e4b`. If OpenClaw's onboarding wizard fills the model field with the bare name `gemma4` (which it does), Ollama returns `404 model 'gemma4' not found` and onboarding fails.
+>
+> Conclusion: for ergonomics with OpenClaw onboarding, **pull without the tag**. If/when Google ships a "Gemma 4 v2" and re-tags `:latest`, you can switch to the explicit `:e4b` for reproducibility — at that point also update OpenClaw's gateway config to match.
 
 ### 2.5 Tune Gemma 4 E4B for tool-calling (custom Modelfile)
 
@@ -333,16 +347,53 @@ For Options A and C, launch onboarding explicitly:
 $ openclaw onboard --install-daemon
 ```
 
-When prompted (either path):
+**Setup mode: Manual** (gives you full control over each option).
 
-- **Gateway host:** `127.0.0.1` (do not accept `0.0.0.0` — that exposes the agent to your LAN).
-- **Gateway / web UI port:** the wizard typically defaults to `18789` for the web UI. Accept the default unless you have a port conflict.
-- **Auth:** enable token auth — store the generated token in your password manager.
-- **Workspace path:** dedicated folder, e.g. `~/OpenClaw/workspace`. This is the directory the agent is allowed to read/write — treat it as a sandbox.
+Wizard cheat-sheet — answer in this order:
+
+| Wizard question | Your answer | Why |
+|---|---|---|
+| Disclaimer (`I understand this is powerful and inherently risky. Continue?`) | **yes** | Required to proceed. |
+| Setup mode | **Manual** | Full control. QuickStart hides options. |
+| Local or remote gateway? | **local** | Everything runs on this Mac. |
+| Gateway bind address | **`127.0.0.1`** | Loopback only — never `0.0.0.0`. |
+| Gateway port | **`18789`** (default) | Accept unless you have a port conflict. |
+| Enable auth? | **yes / token** | Required. |
+| How to provide the token? | **Generate/store plaintext token** | See note below ⚠️ |
+| Tailscale exposure? | **no** | Tailscale comes in Phase 6. |
+| Workspace path | **`~/OpenClaw/workspace`** | Dedicated sandbox folder. |
+| AI provider | **Ollama** (local) | What we installed in Phase 2.3. |
+| Ollama base URL | **`http://127.0.0.1:11434`** | No `/v1` suffix — that's OpenAI-compat mode. |
+| Model | **`gemma4`** (default the wizard offers — accept it) | Resolves to `gemma4:e4b` via `:latest`. ✅ Works as long as Phase 2.4 used `ollama pull gemma4` (not `gemma4:e4b`). |
+| Install as daemon? | **yes** | Auto-start on reboot. |
+| Hatch in TUI / Web UI | **TUI** | Faster to verify; switch to Web UI later. |
+
+> ⚠️ **Token storage — plaintext first, Keychain later.**
+> The wizard offers a `SecretRef` option (which stores the token in macOS Keychain — the ideal end state). However, `SecretRef` requires a *configured secret provider* before it can be used. Trying to configure a provider mid-wizard, or using the env-variable path without the variable set, leads to a dead-end that forces you to restart onboarding with Ctrl+C.
+>
+> **Do this instead:** choose **"Generate/store plaintext token"** to complete onboarding cleanly. Immediately after, migrate the token to Keychain manually:
+>
+> ```bash
+> # 1. Find the generated token
+> $ grep -i token ~/.openclaw/openclaw.json
+>
+> # 2. Store it in macOS Keychain
+> $ security add-generic-password -a "$USER" -s "openclaw/gateway-token" -w '<paste-token-here>'
+>
+> # 3. Update openclaw.json to reference Keychain instead of plaintext
+> # Replace the raw token value with: keychain://openclaw/gateway-token
+> # (verify OpenClaw's exact SecretRef URI syntax in its docs before doing this)
+> ```
+>
+> Until step 3 is done, the token in the JSON is plaintext — acceptable given the Mac has no open ports yet, but don't leave it indefinitely.
+
+After onboarding completes, note the config file path the wizard prints (commonly `~/.openclaw/openclaw.json`). You'll need it in §3.3.
 
 ### 3.3 Wire to local Ollama
 
 Edit the gateway provider config (the wizard prints its path at the end of onboarding; common locations are `~/.openclaw/openclaw.json`, `~/.openclaw/gateway.json`, or `~/.config/openclaw/gateway.json`):
+
+If you went the simpler "no custom Modelfile" path (the recommended baseline), the default config from onboarding will already look approximately like this — just verify it:
 
 ```json
 {
@@ -353,19 +404,21 @@ Edit the gateway provider config (the wizard prints its path at the end of onboa
       "baseUrl": "http://127.0.0.1:11434",
       "apiKey": "ollama-local",
       "models": [
-        { "id": "gemma4-claw", "alias": "default" }
+        { "id": "gemma4", "alias": "default" }
       ]
     }
   ],
-  "defaultModel": "gemma4-claw"
+  "defaultModel": "gemma4"
 }
 ```
+
+If you created the custom `gemma4-claw` Modelfile in §2.5, swap `"gemma4"` → `"gemma4-claw"` in both `models[].id` and `defaultModel`.
 
 Notes that bite people:
 
 - Native Ollama URL — **no `/v1` suffix**. The `/v1` form is only for OpenAI-compatibility mode (`api: "openai"`).
 - `apiKey` must be a non-empty string; Ollama ignores its value. `"ollama-local"` is the conventional placeholder.
-- Match `models[].id` to whatever you `ollama pull`-ed.
+- **Match `models[].id` to how Ollama registered the model**, which depends on how you pulled. `ollama pull gemma4` registers it as `gemma4` (and `:latest`, and `:e4b`). `ollama pull gemma4:e4b` registers it *only* as `gemma4:e4b` and a config saying `"gemma4"` will 404.
 
 Restart and verify:
 
@@ -615,6 +668,7 @@ Then continue from §3.2 (Onboarding).
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `connect ECONNREFUSED 127.0.0.1:11434` | Ollama not running | `brew services start ollama` |
+| `404 model 'gemma4' not found` during onboarding or chat | Model was pulled as `gemma4:e4b`, registered only under that exact tag; OpenClaw asks for `gemma4` | Re-pull without tag: `ollama pull gemma4` (registers all aliases). Or edit `~/.openclaw/openclaw.json` so model id matches what `ollama list` shows. |
 | First-token latency 30 s every time | `OLLAMA_KEEP_ALIVE` not exported | Re-export in `~/.zshrc`, `brew services restart ollama` |
 | `Unauthorized` from OpenClaw → Ollama | Empty `apiKey` in gateway config | Set any non-empty string, e.g. `"ollama-local"` |
 | Gateway listens on `0.0.0.0` | Wizard default override | Edit gateway config → `host: "127.0.0.1"`, restart |
