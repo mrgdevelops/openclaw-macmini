@@ -1,4 +1,4 @@
-﻿# INSTALL â€” OpenClaw on Mac Mini, Local & Secure
+# INSTALL â€” OpenClaw on Mac Mini, Local & Secure
 
 > Step-by-step install of OpenClaw + Ollama + Gemma 4 on a dedicated Mac Mini. Each phase has a **goal**, **commands**, and a **verification** step. Reproducible from a clean macOS install.
 >
