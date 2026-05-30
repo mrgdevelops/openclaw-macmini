@@ -294,7 +294,7 @@ If you used the custom Modelfile (§1.5), swap `"gemma4"` → `"gemma4-claw"` in
 
 Notes that bite:
 
-- **No `/v1` suffix.** That's OpenAI-compat mode only.
+- **No `/v1` suffix.** That's OpenAI-compat mode only — breaks tool calling (model outputs raw JSON as text).
 - `apiKey` must be non-empty; Ollama ignores the value. `"ollama-local"` is conventional.
 - **Match `models[].id` to how Ollama registered it.** `ollama pull gemma4` → `"gemma4"` works. `ollama pull gemma4:e4b` → only `"gemma4:e4b"` works.
 
@@ -305,6 +305,70 @@ $ openclaw chat "Say hi and tell me which model you're running on."
 ```
 
 ✅ **Phase 2 complete.** OpenClaw is running locally with Gemma 4. Everything that follows is hardening, operations, and polish.
+
+---
+
+### 2.4 Add cloud providers — Anthropic + OpenAI (optional, recommended)
+
+> **Why now:** Gemma 4 e4b handles lightweight tasks but struggles with complex agentic loops. Configuring cloud providers now gives you a fallback chain without re-onboarding. Do this once the Ollama baseline is confirmed working (§2.3).
+
+> ⚠️ **API keys required.** This requires Anthropic API access (`console.anthropic.com`) and OpenAI API access (`platform.openai.com`). These are separate from Claude.ai and ChatGPT consumer subscriptions.
+
+**Step 1 — Add auth for each provider:**
+
+```bash
+# Anthropic
+$ openclaw onboard --auth-choice apiKey
+# → Prompts for ANTHROPIC_API_KEY. Does not change your current primary model.
+
+# OpenAI
+$ openclaw onboard --auth-choice openai-api-key
+# → Prompts for OPENAI_API_KEY. Does not change your current primary model.
+```
+
+Or set env vars manually and restart:
+
+```bash
+$ cat <<'EOF' >> ~/.zshrc
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+EOF
+$ source ~/.zshrc
+$ openclaw daemon restart
+```
+
+**Step 2 — Verify models are available:**
+
+```bash
+$ openclaw models list --provider anthropic
+$ openclaw models list --provider openai
+# Pick the model IDs you want from the output.
+```
+
+**Step 3 — Configure fallback chain in `~/.openclaw/openclaw.json`:**
+
+Add `"model"` inside the existing `"defaults"` block:
+
+```json
+"agents": {
+  "defaults": {
+    "workspace": "/Users/skynetlobster/.openclaw/workspace",
+    "model": {
+      "primary": "anthropic/claude-opus-4-6",
+      "fallbacks": ["openai/gpt-5.5", "ollama/gemma4:latest"]
+    }
+  }
+}
+```
+
+> 📌 Use the exact model IDs from `openclaw models list` output. Model IDs can change between OpenClaw releases.
+
+```bash
+$ openclaw daemon restart
+$ openclaw chat "Which model are you running on?"
+```
+
+✅ **Verify:** response names the Anthropic model. Switch to Ollama explicitly with `/model ollama/gemma4:latest` to confirm local fallback still works.
 
 ---
 
