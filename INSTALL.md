@@ -46,33 +46,46 @@
 
 ```bash
 # Enable SSH
+# GUI (recommended — CLI requires Full Disk Access for Terminal):
+# System Settings → General → Sharing → Remote Login: ON
+# CLI alternative (only if Terminal has Full Disk Access in Privacy settings):
 $ sudo systemsetup -setremotelogin on
 
 # Enable Screen Sharing (VNC)
-$ sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false
-$ sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
-# Or simply: System Settings → General → Sharing → Screen Sharing: ON
+# Use Screen Sharing, NOT Remote Management.
+# Remote Management is a superset but does NOT expose a standard VNC port compatible with Windows VNC clients.
+# System Settings → General → Sharing → Screen Sharing: ON
 
-# Find your Mac's LAN IP
-$ ipconfig getifaddr en0    # Ethernet
-# or
-$ ipconfig getifaddr en1    # Wi-Fi
+# Find your Mac's LAN IP and MAC addresses for both interfaces
+$ networksetup -listallhardwareports
+# Shows en0 (Ethernet) and en1 (Wi-Fi) with their MAC addresses
+$ ipconfig getifaddr en0    # Ethernet IP (empty if not connected)
+$ ipconfig getifaddr en1    # Wi-Fi IP
 ```
 
-**From Windows (SSH — terminal access):**
+> 📌 **Reserve BOTH MACs in your router.** The Mac Mini has separate MAC addresses for Ethernet and Wi-Fi. If you only reserve one, the other interface gets a random IP and remote access breaks after a reboot on the other interface.
+
+**From Windows (SSH):**
 
 ```powershell
-# PowerShell has SSH built in
 ssh yourusername@192.168.x.x
 ```
 
-**From Windows (VNC — full desktop):**
+**From Windows (VNC):**
 
-Download [RealVNC Viewer](https://www.realvnc.com/en/connect/download/viewer/) (free) or any VNC client. Connect to `192.168.x.x`. Enter Mac username + password. Full desktop.
+[RealVNC Viewer](https://www.realvnc.com/en/connect/download/viewer/) (free) → connect to `192.168.x.x:5900`.
 
-> 📌 **Security note:** SSH and Screen Sharing are now open on your LAN. This is fine for a home network. In Phase 6, we add Tailscale and can restrict these to the tailnet only. In Phase 3.4, we harden SSH to key-only auth.
+**Verify Screen Sharing is actually running:**
 
-✅ **Verify:** from Windows, `ssh yourusername@<mac-ip>` connects. VNC client shows the Mac desktop. Disconnect monitor/keyboard/mouse from the Mac.
+```bash
+sudo launchctl print system/com.apple.screensharing | grep state
+sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P
+# → should show screensharingd listening on *:5900
+```
+
+> 📌 **Security note:** SSH and Screen Sharing are now open on your LAN. In Phase 6, Tailscale restricts these to the tailnet only.
+
+✅ **Verify:** SSH connects from Windows. VNC client shows the Mac desktop. Disconnect monitor/keyboard/mouse.
 
 ---
 
@@ -271,37 +284,56 @@ Note the config file path the wizard prints (commonly `~/.openclaw/openclaw.json
 
 ### 2.3 Wire to local Ollama
 
-The onboarding wizard should have configured this. Verify in the config file:
+The onboarding wizard configures Ollama, but manual tuning is recommended. Verified working config under `models.providers.ollama` in `~/.openclaw/openclaw.json`:
 
 ```json
-{
-  "providers": [
+"ollama": {
+  "baseUrl": "http://127.0.0.1:11434",
+  "apiKey": "ollama-local",
+  "api": "ollama",
+  "timeoutSeconds": 300,
+  "models": [
     {
-      "id": "ollama-local",
-      "api": "ollama",
-      "baseUrl": "http://127.0.0.1:11434",
-      "apiKey": "ollama-local",
-      "models": [
-        { "id": "gemma4", "alias": "default" }
-      ]
+      "id": "gemma4-claw",
+      "name": "gemma4-claw",
+      "input": ["text", "image"],
+      "contextWindow": 32768,
+      "maxTokens": 8192,
+      "params": {
+        "num_ctx": 32768,
+        "keep_alive": "30m"
+      }
     }
-  ],
-  "defaultModel": "gemma4"
+  ]
 }
 ```
 
-If you used the custom Modelfile (§1.5), swap `"gemma4"` → `"gemma4-claw"` in both places.
+If you are using the vanilla `gemma4` model (no custom Modelfile from §1.5), replace `"gemma4-claw"` with `"gemma4:latest"` in both `id` and `name`.
+
+> ⚠️ **Auto-discovery is disabled when `models.providers.ollama` is explicitly defined.** Only the models listed in the `models` array are available. If your fallback chain references an Ollama model not listed here, it will fail silently.
 
 Notes that bite:
 
 - **No `/v1` suffix.** That's OpenAI-compat mode only — breaks tool calling (model outputs raw JSON as text).
 - `apiKey` must be non-empty; Ollama ignores the value. `"ollama-local"` is conventional.
-- **Match `models[].id` to how Ollama registered it.** `ollama pull gemma4` → `"gemma4"` works. `ollama pull gemma4:e4b` → only `"gemma4:e4b"` works.
+- **Match `models[].id` to how Ollama registered it.** `ollama pull gemma4` → `"gemma4:latest"`. `ollama create gemma4-claw ...` → `"gemma4-claw"`.
+
+Optionally, configure Ollama for memory embeddings (uses `nomic-embed-text`, auto-pulled):
+
+```json
+"agents": {
+  "defaults": {
+    "memorySearch": {
+      "provider": "ollama",
+      "model": "nomic-embed-text"
+    }
+  }
+}
+```
 
 ```bash
 $ openclaw daemon restart
 $ openclaw doctor
-$ openclaw chat "Say hi and tell me which model you're running on."
 ```
 
 ✅ **Phase 2 complete.** OpenClaw is running locally with Gemma 4. Everything that follows is hardening, operations, and polish.
@@ -352,10 +384,10 @@ Add `"model"` inside the existing `"defaults"` block:
 ```json
 "agents": {
   "defaults": {
-    "workspace": "/Users/skynetlobster/.openclaw/workspace",
+    "workspace": "~/.openclaw/workspace",
     "model": {
-      "primary": "anthropic/claude-opus-4-6",
-      "fallbacks": ["openai/gpt-5.5", "ollama/gemma4:latest"]
+      "primary": "openai/gpt-5.5",
+      "fallbacks": ["anthropic/claude-sonnet-4-6", "ollama/gemma4-claw"]
     }
   }
 }
@@ -378,22 +410,20 @@ $ openclaw chat "Which model are you running on?"
 
 ### 3.1 FileVault (disk encryption)
 
+> ⚠️ **Recommendation for headless Mac Mini: skip FileVault.**
+>
+> FileVault requires a password at the *pre-boot* screen — before the kernel, network, SSH or VNC come up. After any unplanned reboot or power cut, the Mac is completely unreachable until someone physically types the password at a monitor. On a 24/7 headless machine this is a serious operational risk.
+>
+> **Skip this section if your Mac Mini runs headless.** Loopback-only binds + application firewall (§3.2) + Tailscale (Phase 6) provide meaningful protection without the cold-boot trap.
+>
+> If you still want FileVault (machine is in a shared physical space):
+
 ```bash
 $ sudo fdesetup enable
 # Save the recovery key in your password manager. Don't lose it.
 ```
 
-✅ **Verify:** `sudo fdesetup status` → `FileVault is On.`
-
-> ⚠️ **FileVault headless cold-boot caveat.**
->
-> FileVault requires a password at the *pre-boot* screen — before the kernel, network, Tailscale or sshd come up. After a power cut, the Mac is **unreachable over the network** until someone physically types the password.
->
-> Mitigations:
->
-> 1. **Keep the Mac powered on 24/7.** Use a UPS if your area has outages.
-> 2. **For planned reboots:** `sudo fdesetup authrestart` — stages the key so the next boot skips the prompt.
-> 3. **Keep a monitor + keyboard within reach** for the rare cold-boot. Set up auto-login at `System Settings → Users & Groups → Automatic login` (handles post-FileVault login, not the FileVault prompt itself).
+> Always use `sudo fdesetup authrestart` before any planned reboot. A plain shutdown without `authrestart` requires physical access to recover.
 
 ### 3.2 Application firewall
 
@@ -408,7 +438,17 @@ Stealth mode silently drops unsolicited inbound packets — port scans see the M
 
 > ⚠️ **Do NOT** run `--setblockall on`. It breaks Tailscale (Phase 6) silently — blocks inbound on all apps including signed ones. Stealth mode + loopback-only binds is the right shape.
 
-### 3.3 Wake for network · prevent sleep
+### 3.3 Wake for network · prevent sleep · auto-login
+
+**Auto-login (required for headless operation):**
+
+Without auto-login, macOS shows a password prompt after every reboot — the machine is unreachable over SSH/VNC until someone types it physically.
+
+`System Settings → Users & Groups → Automatic login` → select your admin user.
+
+> ⚠️ Auto-login is incompatible with FileVault. If you followed §3.1 and enabled FileVault, auto-login will be greyed out — this is the core headless trap. Another reason to skip FileVault on a dedicated headless Mac Mini.
+
+**Sleep and wake:**
 
 `System Settings → Battery → Options`:
 
@@ -419,6 +459,7 @@ Stealth mode silently drops unsolicited inbound packets — port scans see the M
 $ sudo pmset -a sleep 0
 $ sudo pmset -a disksleep 0
 $ sudo pmset -a powernap 1
+$ sudo pmset -a womp 1     # Wake on LAN
 $ pmset -g
 ```
 
@@ -508,13 +549,75 @@ $ curl -fsSL https://openclaw.ai/install.sh | bash
 $ npm update -g openclaw
 
 # Then:
-$ ollama pull gemma4   # re-pull periodically for quant fixes
+$ brew services restart ollama   # always restart after ollama brew upgrade
+$ ollama pull gemma4             # re-pull periodically for quant fixes
 $ openclaw doctor
 ```
 
 > 📌 **Before updating,** check OpenClaw's [release notes](https://github.com/openclaw/openclaw/releases) for breaking changes.
 
-### 4.4 Confirm nothing is exposed
+### 4.4 Backup & recovery
+
+**What needs to survive a factory reset:**
+
+| What | Where | How to back up |
+|---|---|---|
+| Config, credentials, sessions | `~/.openclaw/` | `openclaw backup create` |
+| Personality files (SOUL, USER, AGENTS…) | `~/.openclaw/workspace/` | private git repo (see below) |
+| API keys & tokens | `~/.zshrc` + `openclaw.json` | password manager — **never commit** |
+| Ollama models | `~/.ollama/models/` | re-pull on restore (`ollama pull gemma4`) |
+| Custom Modelfile (if used) | wherever you saved it | include in workspace or this repo |
+
+**Create a full backup:**
+
+```bash
+$ openclaw backup create --output ~/Backups --verify
+# → timestamped .tar.gz: config + credentials + sessions + workspace
+# --verify validates the archive immediately after writing
+```
+
+For a config-only snapshot (faster, no session history):
+
+```bash
+$ openclaw backup create --only-config --output ~/Backups
+```
+
+> ⚠️ The backup archive does **not** store API keys from env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) — those live in `~/.zshrc`. Keep them in your password manager.
+
+**Workspace git backup (recommended for personality & memory):**
+
+The workspace (`~/.openclaw/workspace/`) contains SOUL.md, USER.md, AGENTS.md, IDENTITY.md, and the `memory/` log. Back it up continuously with a private git repo:
+
+```bash
+$ cd ~/.openclaw/workspace
+$ git init
+$ git add AGENTS.md SOUL.md USER.md IDENTITY.md TOOLS.md HEARTBEAT.md memory/
+$ git commit -m "Initial workspace"
+# Then push to a private GitHub/GitLab repo
+```
+
+After each session where the agent updates its memory:
+
+```bash
+$ cd ~/.openclaw/workspace && git add . && git commit -m "Update memory" && git push
+```
+
+**Restore on a fresh Mac Mini:**
+
+1. Complete Phases 0–2 (runtime stack + OpenClaw onboarding with Ollama).
+2. Restore OpenClaw state:
+   ```bash
+   $ tar -xzf <backup.tar.gz> -C ~/
+   ```
+3. Restore workspace (if using git):
+   ```bash
+   $ git clone <private-repo-url> ~/.openclaw/workspace
+   $ openclaw setup --workspace ~/.openclaw/workspace
+   ```
+4. Re-add env vars to `~/.zshrc` (API keys from password manager), then `source ~/.zshrc`.
+5. `$ openclaw daemon restart && openclaw doctor`
+
+### 4.5 Confirm nothing is exposed
 
 ```bash
 $ sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E 'ollama|openclaw|node'
@@ -687,6 +790,8 @@ Then continue from §2.2 (Onboarding).
 | OOM loading `26b` / `31b` | RAM too low | Drop to `gemma4:e4b` |
 | Firewall blocks UI | UI on non-loopback | Use `http://127.0.0.1:18789` exactly |
 | Tailscale SSH/Screen-sharing fails | `--setblockall on` applied | `sudo socketfilterfw --setblockall off` |
+| SSH connects but shows `This system is locked` / VNC times out after reboot | FileVault active on headless Mac — SSH reaches pre-boot unlock environment, macOS hasn't started | Disable FileVault: `sudo fdesetup disable` (see §3.1) |
+| DHCP reservation not working, IP keeps changing | Router reserved the wrong interface MAC | Run `networksetup -listallhardwareports` and reserve BOTH en0 and en1 MACs in the router |
 | Perplexity HTTP 400 | Wrong model id format | Use `"sonar-pro"`, not `"perplexity/sonar-pro"` |
 | Malformed JSON tool-calls | Temperature too high or context overflow | Use Modelfile from §1.5; if persists, step up to `26b-a4b-it-q4_K_M` (≥32 GB) |
 

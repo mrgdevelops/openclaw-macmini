@@ -58,13 +58,15 @@ The actual setup lives in [INSTALL.md](INSTALL.md), structured in phases so each
 
 ## Install phases (overview)
 
-1. **Phase 0 — Reset.** Erase All Content and Settings → fresh macOS, single local admin, no iCloud.
+1. **Phase 0 — Reset & headless server setup.** Erase All Content and Settings → fresh macOS, single local admin, no iCloud. **Includes the full headless foundation: SSH, Screen Sharing (VNC), static IP reservations for both network interfaces, sleep disabled, Wake on LAN, auto-login.** Do all of this before installing any software.
 2. **Phase 1 — Runtime stack.** Homebrew → Node 24 → Ollama → pull Gemma 4 (loopback-only).
-3. **Phase 2 — OpenClaw.** Install via pnpm, official `install.sh`, or npm → `openclaw onboard` → wire to local Ollama.
-4. **Phase 3 — Hardening.** FileVault, application firewall (stealth), agent permissions lockdown, wake-for-network.
-5. **Phase 4 — Operations.** Background services, health checks, update workflow.
-6. **Phase 5 — Assistant identity.** Email, GitHub, social accounts (configured once the base is stable).
-7. **Phase 6 — Remote access.** Tailscale for secure access from other devices.
+3. **Phase 2 — OpenClaw.** Install via npm/pnpm → `openclaw onboard` → wire to local Ollama → optionally add cloud providers (Anthropic, OpenAI) as fallback.
+4. **Phase 3 — Hardening.** Application firewall (stealth mode), agent permissions lockdown. Note: FileVault is **not recommended** for headless Mac Mini — it blocks remote access on cold boot.
+5. **Phase 4 — Operations.** Background services, health checks, update workflow, backup.
+6. **Phase 5 — Assistant identity.** Workspace files (SOUL.md, USER.md, AGENTS.md), external accounts.
+7. **Phase 6 — Remote access.** Tailscale for secure access from outside the local network.
+
+> 💡 **Key lesson learned:** Complete Phase 0 (headless server setup) in full before touching Phase 1. SSH, VNC, static IP, sleep settings, and auto-login must all work reliably before you install the AI stack — otherwise debugging remote access while the AI stack is half-installed is a painful experience.
 
 Phases 0–2 produce a working local assistant. 3–6 harden, operationalise, and extend it.
 
