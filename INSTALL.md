@@ -4,7 +4,7 @@
 >
 > **Conventions:** `$` = normal user. `sudo` called out explicitly. All binds are `127.0.0.1` — never `0.0.0.0`.
 >
-> **Verified working on:** macOS Tahoe 26.4.1 · Mac mini 16 GB · Homebrew 5.1.8 · Node 24.15 · pnpm 10.33 · Ollama (Homebrew formula) · Gemma 4 (`:e4b` via `:latest`) · OpenClaw 2026.4.29 (commit `a448042`). Last verified end-to-end on 2026-04-30.
+> **Verified working on:** macOS Tahoe 26.4.1 · Mac mini 16 GB · Homebrew 5.1.8 · Node 24.16 · npm 11.16 · Ollama 0.24.0 · Gemma 4 (`gemma4:latest`, 9.6 GB Q4_K_M) · OpenClaw 2026.5.27. Last verified end-to-end on 2026-05-31.
 
 ---
 
@@ -12,8 +12,8 @@
 
 - [ ] **Mac mini (Apple Silicon)**, factory-reset-ready.
 - [ ] **Ethernet cable** or Wi-Fi credentials.
-- [ ] **Monitor + USB keyboard + mouse** for first boot (headless after Phase 6).
-- [ ] **Password manager** — for FileVault recovery key (Phase 3.1) and OpenClaw auth token (Phase 2.2).
+- [ ] **Monitor + USB keyboard + mouse** for first boot — only needed for Phase 0. You go headless at the end of Phase 0.1.
+- [ ] **Password manager** — for OpenClaw auth token (Phase 2.2). FileVault not recommended for headless (see §3.1).
 - [ ] **External SSD** for Time Machine (Phase 3.5) — recommended, not blocking.
 - [ ] (Optional) **Prepaid SIM** for the agent's Telegram/WhatsApp identity (Phase 5.1).
 - [ ] **~2 hours uninterrupted.**
@@ -32,7 +32,7 @@
    - **Sign in with Apple ID:** *Skip*.
    - Create a single **local admin user**.
    - Time zone, automatic time: on.
-   - Skip Siri, Screen Time, analytics, FileVault prompt (we enable FileVault in Phase 3).
+   - Skip Siri, Screen Time, analytics, FileVault prompt (skip FileVault entirely for headless — see §3.1).
 3. **macOS up to date:**
    `System Settings → General → Software Update` → install everything pending.
 
@@ -83,9 +83,13 @@ sudo lsof -iTCP:5900 -sTCP:LISTEN -n -P
 # → should show screensharingd listening on *:5900
 ```
 
+**Enable auto-login** (required — without this, macOS shows a password prompt on every reboot and the machine is unreachable headless):
+
+`System Settings → Users & Groups → Automatic login` → select your admin user.
+
 > 📌 **Security note:** SSH and Screen Sharing are now open on your LAN. In Phase 6, Tailscale restricts these to the tailnet only.
 
-✅ **Verify:** SSH connects from Windows. VNC client shows the Mac desktop. Disconnect monitor/keyboard/mouse.
+✅ **Verify:** SSH connects from Windows. VNC shows the Mac desktop. Auto-login is set. **Disconnect monitor/keyboard/mouse — the Mac is now headless.**
 
 ---
 
@@ -404,6 +408,160 @@ $ openclaw chat "Which model are you running on?"
 
 ---
 
+### 2.5 Claude Max subscription via claude-max-api (alternative to API key)
+
+If you have a Claude Max or Pro subscription and want to use it instead of API credits, use `claude-max-api-proxy` — a community tool that exposes your subscription as a local OpenAI-compatible endpoint via the Claude CLI.
+
+> ⚠️ Community tool. Anthropic has restricted subscription usage outside Claude Code in the past. Verify Anthropic's current terms before relying on this.
+
+**Install and authenticate:**
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude                              # opens browser → login with Claude.ai account
+npm install -g claude-max-api-proxy
+```
+
+**OpenClaw 2026.5.x sends content as an array** (`[{type:"text",text:"hello"}]`) but claude-max-api expects a plain string (`"hello"`). This causes `[object Object]` errors in Telegram. Fix with a normalizer shim:
+
+```bash
+sudo tee /opt/homebrew/bin/claude-max-shim.js > /dev/null << 'EOF'
+#!/usr/bin/env node
+const http = require('http');
+http.createServer((req, res) => {
+  let body = '';
+  req.on('data', c => body += c);
+  req.on('end', () => {
+    try {
+      const d = JSON.parse(body);
+      if (d.messages) {
+        d.messages = d.messages.map(m => ({
+          ...m,
+          content: Array.isArray(m.content)
+            ? m.content.filter(b => b.type==='text').map(b => b.text).join('\n')
+            : m.content
+        }));
+      }
+      body = JSON.stringify(d);
+    } catch(e) {}
+    const opts = {
+      hostname:'127.0.0.1', port:3456, path:req.url, method:req.method,
+      headers:{...req.headers,'content-length':Buffer.byteLength(body)}
+    };
+    const p = http.request(opts, pr => { res.writeHead(pr.statusCode, pr.headers); pr.pipe(res); });
+    p.on('error', e => { res.writeHead(500); res.end(JSON.stringify({error:e.message})); });
+    p.write(body); p.end();
+  });
+}).listen(3458,'127.0.0.1',()=>console.log('Shim :3458 -> :3456'));
+EOF
+```
+
+**LaunchDaemons for both services** (system-level, start before login — required for headless):
+
+```bash
+# claude-max-api daemon
+sudo tee /Library/LaunchDaemons/com.claude-max-api.plist > /dev/null << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-max-api</string>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>UserName</key><string>YOUR_USERNAME</string>
+  <key>ProgramArguments</key>
+  <array><string>/opt/homebrew/bin/claude-max-api</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/YOUR_USERNAME</string>
+    <key>PATH</key><string>/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key><string>/tmp/claude-max-api.log</string>
+  <key>StandardErrorPath</key><string>/tmp/claude-max-api.log</string>
+</dict></plist>
+EOF
+
+# shim daemon
+sudo tee /Library/LaunchDaemons/com.claude-max-shim.plist > /dev/null << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-max-shim</string>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/opt/node@24/bin/node</string>
+    <string>/opt/homebrew/bin/claude-max-shim.js</string>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/claude-max-shim.log</string>
+  <key>StandardErrorPath</key><string>/tmp/claude-max-shim.log</string>
+</dict></plist>
+EOF
+
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.claude-max-api.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.claude-max-shim.plist
+```
+
+> 📌 Replace `YOUR_USERNAME` with your actual macOS username. The `HOME` env var is required — without it, the Claude CLI cannot find its authentication credentials.
+
+**OpenClaw provider config** (`~/.openclaw/openclaw.json`):
+
+```json
+"claude-max": {
+  "baseUrl": "http://localhost:3458/v1",
+  "apiKey": "not-needed",
+  "api": "openai-completions",
+  "models": [
+    {"id": "claude-sonnet-4", "name": "Claude Sonnet 4", "input": ["text","image"], "contextWindow": 200000, "maxTokens": 8192},
+    {"id": "claude-opus-4",   "name": "Claude Opus 4",   "input": ["text","image"], "contextWindow": 200000, "maxTokens": 8192}
+  ]
+}
+```
+
+> ⚠️ Use `openai-completions`, NOT `openai-responses`. The proxy only implements `/v1/chat/completions`, not `/v1/responses`.
+
+**Verify end-to-end:**
+
+```bash
+curl -s http://localhost:3458/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4","messages":[{"role":"user","content":[{"type":"text","text":"Responde FINAL_OK"}]}]}'
+# Expected: FINAL_OK
+```
+
+---
+
+### 2.6 Convert OpenClaw gateway to LaunchDaemon (required for headless)
+
+> ⚠️ **This step is mandatory for headless operation.** `openclaw onboard --install-daemon` installs the gateway as a **LaunchAgent** (`~/Library/LaunchAgents/`), which only starts after a GUI login. On a headless Mac that boots over SSH, this means OpenClaw, Telegram, and all agents are dead after every reboot. You will not notice this until the first reboot.
+>
+> OpenClaw itself acknowledges this in its error messages: *"Headless deployments should use a custom LaunchDaemon (not shipped)"* — but the official docs don't provide the solution. This section fills that gap.
+
+Convert to a system-level **LaunchDaemon** (`/Library/LaunchDaemons/`):
+
+```bash
+# 1. Stop and unload the LaunchAgent
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+
+# 2. Copy to system LaunchDaemons
+sudo cp ~/Library/LaunchAgents/ai.openclaw.gateway.plist /Library/LaunchDaemons/ai.openclaw.gateway.plist
+
+# 3. Load the system daemon
+sudo launchctl bootstrap system /Library/LaunchDaemons/ai.openclaw.gateway.plist
+```
+
+**Verify after a reboot:**
+
+```bash
+sudo reboot
+# wait 1-2 minutes, then SSH back in
+sudo launchctl list | grep -E "claw|claude"
+# Expected: ai.openclaw.gateway, com.claude-max-api, com.claude-max-shim
+openclaw status
+```
+
+> 📌 All three services must be LaunchDaemons: `ai.openclaw.gateway`, `com.claude-max-api`, `com.claude-max-shim`. If any are missing, check logs at `/tmp/*.log` and verify the plist is in `/Library/LaunchDaemons/`.
+
+---
+
 ## Phase 3 — Hardening
 
 **Goal:** lock down the box now that the stack is verified working.
@@ -438,17 +596,9 @@ Stealth mode silently drops unsolicited inbound packets — port scans see the M
 
 > ⚠️ **Do NOT** run `--setblockall on`. It breaks Tailscale (Phase 6) silently — blocks inbound on all apps including signed ones. Stealth mode + loopback-only binds is the right shape.
 
-### 3.3 Wake for network · prevent sleep · auto-login
+### 3.3 Wake for network · prevent sleep
 
-**Auto-login (required for headless operation):**
-
-Without auto-login, macOS shows a password prompt after every reboot — the machine is unreachable over SSH/VNC until someone types it physically.
-
-`System Settings → Users & Groups → Automatic login` → select your admin user.
-
-> ⚠️ Auto-login is incompatible with FileVault. If you followed §3.1 and enabled FileVault, auto-login will be greyed out — this is the core headless trap. Another reason to skip FileVault on a dedicated headless Mac Mini.
-
-**Sleep and wake:**
+> 📌 Auto-login was already configured in Phase 0.1. If you skipped it, do it now: `System Settings → Users & Groups → Automatic login`. It is incompatible with FileVault — another reason to skip §3.1 on headless.
 
 `System Settings → Battery → Options`:
 
@@ -463,9 +613,9 @@ $ sudo pmset -a womp 1     # Wake on LAN
 $ pmset -g
 ```
 
-### 3.4 SSH — defer, harden later
+### 3.4 SSH — harden (already enabled in Phase 0.1)
 
-**Leave Remote Login disabled for now.** When you enable SSH (Phase 6):
+SSH is already running. To restrict to key-only auth (recommended once Tailscale is set up):
 
 ```bash
 $ sudo nano /etc/ssh/sshd_config.d/100-hardening.conf
@@ -519,11 +669,23 @@ $ sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -v 127.0.0.1 || echo "no non-loopbac
 
 **Goal:** daemons survive reboots, logs are easy to find, updates are scripted.
 
-### 4.1 Auto-start on boot
+### 4.1 Auto-start on boot — LaunchDaemons vs LaunchAgents
+
+> ⚠️ **Critical for headless operation.**
+>
+> macOS has two types of persistent services:
+> - **LaunchAgents** (`~/Library/LaunchAgents/`) — start only after a GUI user login. On a headless Mac that boots without a monitor, SSH alone does NOT trigger a GUI session. Services installed here will not run after a reboot until someone logs in graphically.
+> - **LaunchDaemons** (`/Library/LaunchDaemons/`) — start at boot at the system level, before any login. Required for headless servers.
+>
+> `openclaw onboard --install-daemon` installs OpenClaw as a **LaunchAgent** by default. For headless operation, all services (OpenClaw gateway, claude-max-api, and any shims) must be moved to LaunchDaemons.
+
+Verify all services are running after a reboot:
 
 ```bash
-$ brew services list
-# Expect ollama: started. OpenClaw daemon was installed in Phase 2.2.
+sudo launchctl list | grep -E "claw|claude"
+# Expected: com.claude-max-api, com.claude-max-shim, ai.openclaw.gateway
+brew services list | grep ollama
+# Expected: ollama started
 ```
 
 ### 4.2 Health check one-liner
@@ -792,6 +954,10 @@ Then continue from §2.2 (Onboarding).
 | Tailscale SSH/Screen-sharing fails | `--setblockall on` applied | `sudo socketfilterfw --setblockall off` |
 | SSH connects but shows `This system is locked` / VNC times out after reboot | FileVault active on headless Mac — SSH reaches pre-boot unlock environment, macOS hasn't started | Disable FileVault: `sudo fdesetup disable` (see §3.1) |
 | DHCP reservation not working, IP keeps changing | Router reserved the wrong interface MAC | Run `networksetup -listallhardwareports` and reserve BOTH en0 and en1 MACs in the router |
+| After reboot via SSH: `launchctl list \| grep claw` returns nothing | Services installed as LaunchAgents — don't start without GUI login | Move services to `/Library/LaunchDaemons/` (see §4.1) |
+| Telegram responses show `[object Object]` | OpenClaw sends content as array; claude-max-api expects string | Add normalizer shim on port 3458 (see §2.5) |
+| claude-max returns 404 on inference | Provider configured with `api: "openai-responses"` — not supported | Change to `api: "openai-completions"` |
+| claude-max-api fails after reboot: `Not logged in` | LaunchDaemon missing `HOME` env var — Claude CLI can't find auth | Add `HOME=/Users/YOUR_USERNAME` to the plist EnvironmentVariables |
 | Perplexity HTTP 400 | Wrong model id format | Use `"sonar-pro"`, not `"perplexity/sonar-pro"` |
 | Malformed JSON tool-calls | Temperature too high or context overflow | Use Modelfile from §1.5; if persists, step up to `26b-a4b-it-q4_K_M` (≥32 GB) |
 
